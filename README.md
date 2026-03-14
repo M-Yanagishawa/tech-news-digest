@@ -3,8 +3,8 @@
 毎日19時（JST）に自動収集・日本語翻訳されるテックニュースのダイジェストサイトです。
 GitHub Actions で生成され、GitHub Pages で公開されます。
 
-**→ [最新のニュースを見る](https://YOUR_USERNAME.github.io/tech-news-digest/)**
-**→ [アーカイブ一覧](https://YOUR_USERNAME.github.io/tech-news-digest/archive/)**
+**→ [最新のニュースを見る](https://M-Yanagishawa.github.io/tech-news-digest/)**
+**→ [アーカイブ一覧](https://M-Yanagishawa.github.io/tech-news-digest/archive/)**
 
 ---
 
