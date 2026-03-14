@@ -3,7 +3,7 @@ name: 📡 Daily Tech News Digest
 on:
   schedule:
     # 19:05 JST = 10:05 UTC  (Coworkタスクの5分後)
-    - cron: '5 10 * * *'
+    - cron: '0 20 * * *'
   workflow_dispatch:   # GitHub UIから手動実行ボタン
 
 # ── 最小権限の原則 ─────────────────────────────────────────────────────────────
