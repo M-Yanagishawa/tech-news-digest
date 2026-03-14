@@ -196,6 +196,87 @@ def categorize(title, url=''):
     return 'other'
 
 
+# ── Importance Scoring ────────────────────────────────────────────────────────
+# 純粋なキーワードマッチング + エンゲージメント数によるスコアリング
+# 外部API・Claudeは不使用 — Python のみで完結
+#
+# Level 3 = CRITICAL  … ゼロデイ・ランサムウェア・大規模侵害など即対応が必要な情報
+# Level 2 = HIGH      … 重要CVE・メジャーバージョンアップ・大きな仕様変更など要チェック
+# Level 1 = NORMAL    … 通常の技術情報・議論・チュートリアルなど
+
+_CRITICAL_KW = [
+    'zero-day', 'zero day', '0-day', '0day',
+    'actively exploited', 'in the wild', 'exploitation detected',
+    'remote code execution', ' rce ', '(rce)',
+    'ransomware', 'wiper malware', 'nation-state',
+    'supply chain attack', 'supply chain compromise',
+    'backdoor discovered', 'backdoor found',
+    'emergency patch', 'emergency update', 'emergency directive',
+    'critical infrastructure attack',
+    'millions of users', 'millions of accounts',
+    'massive data breach', 'large-scale breach',
+    'critical vulnerability',
+]
+
+_HIGH_KW = [
+    'cve-20', 'vulnerability', 'security advisory', 'security alert',
+    'patch tuesday', 'exploit', 'malware', 'phishing campaign',
+    'breach', 'hacked', 'data leak', 'exposed database',
+    'major release', 'stable release', 'lts release', 'ga release',
+    'breaking change', 'breaking changes',
+    'end of life', ' eol ', 'end of support', 'deprecated',
+    'critical bug', 'regression', 'security fix',
+]
+
+# メジャーバージョン番号を含む技術名のパターン（例: "React 19", "Next.js 15.2"）
+_MAJOR_VER = re.compile(
+    r'\b(react|next\.js|nextjs|vue|nuxt|angular|svelte|sveltekit|astro|remix|'
+    r'bun|deno|node\.js|node|vite|typescript|javascript|'
+    r'python|rust|go |golang|java |kotlin|swift|'
+    r'kubernetes|k8s|terraform|docker|'
+    r'postgres|postgresql|mysql|redis|mongodb|sqlite|'
+    r'aws|cloudflare|nginx|apache)\s+v?\d+',
+    re.IGNORECASE
+)
+
+
+def calc_importance(title: str, url: str = '', category: str = 'other',
+                    engagement: int = 0) -> int:
+    """
+    記事の重要度を 1〜3 で返す（外部API不使用・純粋Python）。
+    title / url / カテゴリ / エンゲージメント数をもとに判定。
+    """
+    text = (title + ' ' + (url or '')).lower()
+
+    # キーワードで基本レベルを決定
+    if any(k in text for k in _CRITICAL_KW):
+        level = 3
+    elif any(k in text for k in _HIGH_KW):
+        level = 2
+    elif _MAJOR_VER.search(title):
+        level = 2
+    else:
+        level = 1
+
+    # セキュリティカテゴリは最低でも HIGH
+    if category == 'security' and level < 2:
+        level = 2
+
+    # 高エンゲージメント（HN 500点超 / Reddit 2000点超）は最低でも HIGH
+    if engagement >= 500 and level < 2:
+        level = 2
+
+    return level
+
+
+# 重要度ラベル定義（HTML出力用）
+_IMP = {
+    3: ('<span class="imp imp-c">🔴 CRITICAL</span>', 'crit'),
+    2: ('<span class="imp imp-h">🟠 HIGH</span>',     'high'),
+    1: ('', ''),
+}
+
+
 # ── HTML Helpers ──────────────────────────────────────────────────────────────
 
 def esc(x): return HL.escape(str(x or ''))
@@ -222,21 +303,31 @@ def title_block(s, url, link_class=''):
         t_html += f'<span class="title-en">{esc(title_en)}</span>'
     return f'<div class="story-title">{t_html}</div>'
 
+def _imp_html(item):
+    """重要度バッジとカードCSSクラスを返す"""
+    imp = item.get('importance', 1)
+    badge_html, css_class = _IMP.get(imp, ('', ''))
+    return badge_html, css_class
+
 def hn_card(s):
     url = s.get('url', s.get('hn_url','#'))
     d   = domain_of(url)
-    return (f'<div class="card">'
+    imp_badge, imp_cls = _imp_html(s)
+    cls = f'card {imp_cls}' if imp_cls else 'card'
+    return (f'<div class="{cls}">'
             + title_block(s, url)
-            + f'<div class="meta">{badge(s.get("score",0))}'
+            + f'<div class="meta">{imp_badge}{badge(s.get("score",0))}'
             + f'<span class="mi">💬 {s.get("comments",0)}</span>'
             + (f'<span class="domain">{esc(d)}</span>' if d else '')
             + f'<a href="{esc(s.get("hn_url",url))}" target="_blank" class="ext">HNで議論</a></div></div>')
 
 def reddit_card(p):
     flair = (f'<span class="flair">{esc(p["flair"])}</span>' if p.get('flair') else '')
-    return (f'<div class="card">'
+    imp_badge, imp_cls = _imp_html(p)
+    cls = f'card {imp_cls}' if imp_cls else 'card'
+    return (f'<div class="{cls}">'
             + title_block(p, p.get('url','#'))
-            + f'<div class="meta">{badge(p.get("score",0))}'
+            + f'<div class="meta">{imp_badge}{badge(p.get("score",0))}'
             + f'<span class="mi">💬 {p.get("num_comments",0)}</span>'
             + f'<span class="sub">r/{esc(p.get("subreddit",""))}</span>'
             + flair
@@ -246,12 +337,14 @@ def zenn_card(a):
     title_ja = a.get('title_ja') or a.get('title', '')
     title_en = a.get('title', '')
     has_ja   = title_ja != title_en
+    imp_badge, imp_cls = _imp_html(a)
+    cls = f'card {imp_cls}' if imp_cls else 'card'
     t_html = f'<a class="tlink" href="{esc(a["url"])}" target="_blank" rel="noopener">{esc(a.get("emoji","📝"))} {esc(title_ja)}</a>'
     if has_ja:
         t_html += f'<span class="title-en">{esc(title_en)}</span>'
-    return (f'<div class="card">'
+    return (f'<div class="{cls}">'
             + f'<div class="story-title">{t_html}</div>'
-            + f'<div class="meta">{badge(a.get("score",0), "♥")}'
+            + f'<div class="meta">{imp_badge}{badge(a.get("score",0), "♥")}'
             + f'<span class="mi">💬 {a.get("comments",0)}</span>'
             + f'<span class="author">by {esc(a.get("author",""))}</span>'
             + f'<span class="domain">zenn.dev</span></div></div>')
@@ -263,13 +356,15 @@ def rss_card(item):
     title_ja = item.get('title_ja') or item.get('title','')
     title_en = item.get('title','')
     has_ja   = title_ja != title_en
+    imp_badge, imp_cls = _imp_html(item)
+    cls = f'card rss {imp_cls}' if imp_cls else 'card rss'
     t_html = f'<a class="tlink" href="{esc(item["url"])}" target="_blank" rel="noopener">{esc(title_ja)}</a>'
     if has_ja:
         t_html += f'<span class="title-en">{esc(title_en)}</span>'
-    return (f'<div class="card rss">'
+    return (f'<div class="{cls}">'
             + f'<div class="story-title">{t_html}</div>'
             + dhtml
-            + f'<div class="meta"><span class="src-tag">{esc(item.get("source",""))}</span>'
+            + f'<div class="meta">{imp_badge}<span class="src-tag">{esc(item.get("source",""))}</span>'
             + (f'<span class="mi">{esc(date)}</span>' if date else '')
             + '</div></div>')
 
@@ -331,6 +426,14 @@ body{background:var(--bg);color:var(--tx);font-family:-apple-system,BlinkMacSyst
 .empty{color:var(--mu);font-size:13px;padding:8px 4px}
 .rss{border-left:2px solid #1a2640}
 
+/* Importance badges */
+.imp{font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;letter-spacing:.3px;white-space:nowrap}
+.imp-c{background:#3d1a1a;color:#f85149;border:1px solid rgba(248,81,73,.5)}
+.imp-h{background:#2d1f0e;color:#f0883e;border:1px solid rgba(240,136,62,.4)}
+/* Card border highlight for important items */
+.card.crit{border-left:3px solid #f85149 !important;border-color:#f85149}
+.card.high{border-left:3px solid #f0883e !important;border-color:rgba(240,136,62,.6)}
+
 /* 2-col grid for desktop */
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:24px}
 
@@ -351,27 +454,43 @@ body{background:var(--bg);color:var(--tx);font-family:-apple-system,BlinkMacSyst
 """
 
 
+def _by_imp(items):
+    """重要度（desc）→ エンゲージメント（desc）の順にソート"""
+    return sorted(items, key=lambda x: (x.get('importance', 1), x.get('score', 0)), reverse=True)
+
 def build_html(hn, reddit, zenn, rss, archive_link=''):
     now_jst = datetime.now(timezone(timedelta(hours=9)))
     date_str = now_jst.strftime('%Y年%m月%d日 %H:%M')
     date_file = now_jst.strftime('%Y%m%d')
 
+    # カテゴリ分類（重要度はmain()で付与済み）
     cats = {k: [] for k in ('security','ai','cloud','frontend','other')}
     for s in hn: cats[categorize(s.get('title',''), s.get('url',''))].append(s)
 
-    webdev = [p for p in reddit if p.get('subreddit') == 'webdev']
-    prog   = [p for p in reddit if p.get('subreddit') == 'programming']
+    # 各カテゴリ内を重要度順にソート
+    for key in cats:
+        cats[key] = _by_imp(cats[key])
+
+    webdev = _by_imp([p for p in reddit if p.get('subreddit') == 'webdev'])
+    prog   = _by_imp([p for p in reddit if p.get('subreddit') == 'programming'])
+    rss_sorted = _by_imp(rss)
+    zenn_sorted = _by_imp(zenn)
     total  = len(hn) + len(reddit) + len(zenn) + len(rss)
+
+    # CRITICALが何件あるかカウントしてヘッダーに表示
+    critical_count = sum(1 for items in [hn, reddit, rss] for x in items if x.get('importance') == 3)
+    critical_note  = (f' <span style="font-size:11px;color:#f85149;font-weight:700">'
+                      f'⚠ CRITICAL {critical_count}件</span>') if critical_count > 0 else ''
 
     arch_html = (f'<a class="arch-link" href="{esc(archive_link)}">📂 過去のアーカイブ</a>' if archive_link else '')
 
     sec_security = section('🔐','セキュリティ・インシデント','#f85149',
-        [rss_card(i) for i in rss] + [hn_card(s) for s in cats['security'][:4]],
+        [rss_card(i) for i in rss_sorted] + [hn_card(s) for s in cats['security'][:4]],
         len(rss)+len(cats['security']))
     sec_ai    = section('🤖','AI・機械学習','#bc8cff',[hn_card(s) for s in cats['ai'][:7]],len(cats['ai']))
     sec_cloud = section('☁️','AWS・Cloudflare・クラウド','#58a6ff',[hn_card(s) for s in cats['cloud'][:7]],len(cats['cloud']))
     sec_fe    = section('⚡','フロントエンド（Next.js/Bun/TypeScript）','#3fb950',[hn_card(s) for s in cats['frontend'][:8]],len(cats['frontend']))
-    sec_zenn  = section('📘','Zenn トレンド','#3ea8ff',[zenn_card(a) for a in zenn[:10]],len(zenn))
+    sec_zenn  = section('📘','Zenn トレンド','#3ea8ff',[zenn_card(a) for a in zenn_sorted[:10]],len(zenn))
     sec_webdev = section('🌐','Reddit r/webdev','#ff4500',[reddit_card(p) for p in webdev[:7]],len(webdev))
     sec_prog   = section('💻','Reddit r/programming','#ff6534',[reddit_card(p) for p in prog[:7]],len(prog))
     sec_other  = section('📰','HN その他注目記事','#6e7681',[hn_card(s) for s in cats['other'][:8]],len(cats['other']))
@@ -387,7 +506,7 @@ def build_html(hn, reddit, zenn, rss, archive_link=''):
 </head>
 <body>
 <header class="hdr">
-  <div class="htitle">📡 Tech News Digest<span>毎日テックニュースまとめ</span></div>
+  <div class="htitle">📡 Tech News Digest<span>毎日テックニュースまとめ{critical_note}</span></div>
   <div class="hdate">🕐 {date_str} JST<br>{total}件取得</div>
 </header>
 <nav class="nav">
@@ -557,7 +676,7 @@ def main():
     rss += fetch_rss('CISA Advisories',    'https://www.cisa.gov/cybersecurity-advisories/all.xml')
 
     # Translate titles
-    print("\n[5/6] Translating titles to Japanese...")
+    print("\n[5/7] Translating titles to Japanese...")
     hn     = add_translations(hn)
     reddit = add_translations(reddit)
     zenn_en_idx = [i for i, a in enumerate(zenn)
@@ -568,8 +687,30 @@ def main():
         for i, ja in zip(zenn_en_idx, translated):
             zenn[i]['title_ja'] = ja
 
+    # Importance scoring (pure Python keyword + engagement heuristics)
+    print("\n[6/7] Scoring importance...")
+    for s in hn:
+        cat = categorize(s.get('title', ''), s.get('url', ''))
+        s['importance'] = calc_importance(s.get('title', ''), s.get('url', ''),
+                                          cat, s.get('score', 0))
+    for p in reddit:
+        cat = categorize(p.get('title', ''), p.get('url', ''))
+        p['importance'] = calc_importance(p.get('title', ''), p.get('url', ''),
+                                          cat, p.get('score', 0))
+    for a in zenn:
+        a['importance'] = calc_importance(a.get('title', ''), a.get('url', ''),
+                                          'other', a.get('score', 0))
+    for item in rss:
+        # RSSはセキュリティソースのみなのでカテゴリは 'security' 固定
+        item['importance'] = calc_importance(item.get('title', ''), item.get('url', ''),
+                                             'security', 0)
+
+    critical_n = sum(1 for x in hn + reddit + rss if x.get('importance') == 3)
+    high_n     = sum(1 for x in hn + reddit + rss if x.get('importance') == 2)
+    print(f"  → CRITICAL:{critical_n}  HIGH:{high_n}")
+
     # Generate HTML
-    print("\n[6/6] Building HTML...")
+    print("\n[7/7] Building HTML...")
     now_jst   = datetime.now(timezone(timedelta(hours=9)))
     year      = now_jst.strftime('%Y')
     month     = now_jst.strftime('%m')
