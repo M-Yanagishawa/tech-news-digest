@@ -536,7 +536,7 @@ def main():
     print("=" * 55)
 
     # Env vars injected by workflow (no secrets, just public repo info)
-    gh_owner  = os.environ.get('GH_OWNER', 'your-username')
+    gh_owner  = os.environ.get('GH_OWNER', 'M-Yanagishawa')
     gh_repo   = os.environ.get('GH_REPO',  'tech-news-digest')
     pages_url = os.environ.get('PAGES_URL', f'https://{gh_owner}.github.io/{gh_repo}').rstrip('/')
 
